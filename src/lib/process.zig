@@ -68,7 +68,6 @@ pub const Process = struct {
         const stop_reason: StopReason = .init(wait_status);
         proc.state_ = stop_reason.reason;
         return stop_reason;
-        // std.debug.print("wait_status: {d}\n", .{wait_status});
     }
 };
 fn perror(msg: []const u8) void {
@@ -91,25 +90,7 @@ pub fn print_stop_reason(process: *const Process, reason: StopReason) void {
         .Running => {},
     }
 }
-// pub fn signalName(sig: u32) []const u8 {
-//     return switch (sig) {
-//         linux.SIG.HUP
-//         1 => "HUP",
-//         2 => "INT",
-//         3 => "QUIT",
-//         4 => "ILL",
-//         5 => "TRAP",
-//         6 => "ABRT",
-//         7 => "BUS",
-//         8 => "FPE",
-//         9 => "KILL",
-//         11 => "SEGV",
-//         13 => "PIPE",
-//         14 => "ALRM",
-//         15 => "TERM",
-//         else => "UNKNOWN",
-//     };
-// }
+
 pub fn signalName(sig: u32) []const u8 {
     const sig_type = @TypeOf(linux.SIG);
     const info = @typeInfo(sig_type);
@@ -124,12 +105,6 @@ pub fn signalName(sig: u32) []const u8 {
         },
         else => {},
     }
-    // inline for (fields) |field| {
-    //     const field_value = @field(sig_type, field.name);
-    //     if (field_value == sig) {
-    //         return field.name;
-    //     }
-    // }
 
     return "UNKNOWN";
 }

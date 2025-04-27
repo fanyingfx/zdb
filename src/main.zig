@@ -10,15 +10,8 @@ pub fn main() !void {
         std.debug.panic("No arguments given\n", .{});
     }
 
-    // std.debug.print("{s}\n", .{args[1]});
-
     var proc = try zdb.attach(args);
-    // var status: u32 = 0;
-    // const options = 0; // std.os.linux.W.
 
-    // if (std.os.linux.waitpid(pid, &status, options) < 0) {
-    //     return error.WaitpidFailed;
-    // }
     const allocator = std.heap.page_allocator;
 
     var ln = Linenoise.init(allocator);
@@ -36,9 +29,7 @@ pub fn main() !void {
             try ln.history.add(input);
         }
         if (line_str.len > 0) {
-            // std.debug.print("{s}\n", .{line_str});
-            zdb.handle_command(&proc,line_str);
+            zdb.handle_command(&proc, line_str);
         }
     }
 }
-
