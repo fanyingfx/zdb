@@ -18,7 +18,7 @@ pub fn handle_command(proc: *Process, line: []const u8) void {
     var argIter = std.mem.splitScalar(u8, line, ' ');
     const command = argIter.next().?;
     if (is_prefix(command, "continue")) {
-        std.log.info("start resume {d}\n", .{proc.pid_});
+        std.log.info("start resume {d}\n", .{proc.pid});
         proc.resume_process();
         const reason = proc.wait_on_signal();
         print_stop_reason(proc, reason);

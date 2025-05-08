@@ -1,42 +1,57 @@
 const std = @import("std");
 const linux = std.os.linux;
+const posix = std.posix;
+const Pipe = @import("pipe.zig").Pipe;
 const ProcessState = enum { Stopped, Running, Exited, Terminated };
+const Err = error{ExecError,ForkFailed};
 const StopReason = struct {
     reason: ProcessState,
     info: u32,
     pub fn init(wait_status: u32) StopReason {
         var stop_reason: StopReason = undefined;
-        if (linux.W.IFEXITED(wait_status)) {
+        if (posix.W.IFEXITED(wait_status)) {
             stop_reason.reason = .Exited;
-            stop_reason.info = linux.W.EXITSTATUS(wait_status);
-        } else if (linux.W.IFSIGNALED(wait_status)) {
+            stop_reason.info = posix.W.EXITSTATUS(wait_status);
+        } else if (posix.W.IFSIGNALED(wait_status)) {
             stop_reason.reason = .Terminated;
-            stop_reason.info = linux.W.TERMSIG(wait_status);
-        } else if (linux.W.IFSTOPPED(wait_status)) {
+            stop_reason.info = posix.W.TERMSIG(wait_status);
+        } else if (posix.W.IFSTOPPED(wait_status)) {
             stop_reason.reason = .Stopped;
-            stop_reason.info = linux.W.STOPSIG(wait_status);
+            stop_reason.info = posix.W.STOPSIG(wait_status);
         }
         return stop_reason;
     }
 };
 pub const Process = struct {
-    pid_: linux.pid_t = 0,
+    pid: posix.pid_t = 0,
     terminate_on_end_: bool = true,
-    state_: ProcessState = .Stopped,
-    pub fn init(pid: linux.pid_t, terminater_on_end: bool) Process {
-        return .{ .pid_ = pid, .terminate_on_end_ = terminater_on_end };
+    state: ProcessState = .Stopped,
+    pub fn init(pid: posix.pid_t, terminater_on_end: bool) Process {
+        return .{ .pid = pid, .terminate_on_end_ = terminater_on_end };
     }
 
     pub fn launch(path: [*:0]const u8) !Process {
-        const pid: linux.pid_t = @intCast(linux.fork());
+        var channel_buf:[1024]u8=undefined;
+        var channel: Pipe = try .init(true);
+        const pid: posix.pid_t = @intCast(linux.fork());
         if (pid < 0) {
             return error.ForkFailed;
         }
         if (pid == 0) {
-            if (linux.ptrace(linux.PTRACE.TRACEME, 0, 0, 0, 0) < 0) {
-                perror("Trace Failed!");
-            }
-            std.posix.execvpeZ(path, &.{null}, &.{null}) catch return error.ExecError;
+            posix.ptrace(linux.PTRACE.TRACEME, 0, 0, 0 ) catch {
+                exit_and_set_error(&channel,Err.ForkFailed);
+            };
+            std.posix.execvpeZ(path, &.{null}, &.{null}) catch {
+                exit_and_set_error(&channel,Err.ExecError);
+            };
+        }
+        channel.close_write();
+        const data = try channel.read(&channel_buf);
+        channel.close_read();
+        if (data.len > 0){
+            _= std.posix.waitpid(pid,0);
+            const err = @errorFromInt(data[0]);
+            return err;
         }
         var proc: Process = .init(pid, true);
         _ = proc.wait_on_signal();
@@ -45,66 +60,80 @@ pub const Process = struct {
     pub fn attach(pid: linux.pid_t) !Process {
         if (pid <= 0)
             return error.InvalidPid;
-        if (linux.ptrace(linux.PTRACE.ATTACH, pid, 0, 0, 0) < 0) {
+        posix.ptrace(linux.PTRACE.ATTACH, pid, 0, 0) catch {
             return error.AttachFailed;
-        }
+        };
         var proc: Process = .init(pid, false);
         _ = proc.wait_on_signal();
         return proc;
     }
     pub fn resume_process(proc: *Process) void {
-        if (linux.ptrace(linux.PTRACE.CONT, proc.pid_, 0, 0, 0) < 0) {
+        posix.ptrace(linux.PTRACE.CONT, proc.pid, 0, 0) catch {
             std.debug.panic("Couldn't continue\n", .{});
-        }
-        proc.state_ = .Running;
+        };
+        proc.state = .Running;
     }
 
     pub fn wait_on_signal(proc: *Process) StopReason {
-        var wait_status: u32 = undefined;
+        // var wait_status: u32 = undefined;
         const options = 0;
-        if (linux.waitpid(proc.pid_, &wait_status, options) < 0) {
-            perror("waitpid failed\n");
-        }
-        const stop_reason: StopReason = .init(wait_status);
-        proc.state_ = stop_reason.reason;
+        const res=posix.waitpid(proc.pid,  options) ;
+        const stop_reason: StopReason = .init(res.status);
+        proc.state = stop_reason.reason;
         return stop_reason;
     }
 };
-fn perror(msg: []const u8) void {
-    std.debug.print("{s}\n", .{@tagName(std.posix.errno(-1))});
-    std.debug.panic("{s}\n", .{msg});
-}
-pub fn print_stop_reason(process: *const Process, reason: StopReason) void {
-    std.debug.print("Process {d} ", .{process.pid_});
+// fn perror(msg: []const u8) void {
+//     std.debug.print("{s}\n", .{@tagName(std.posix.errno(-1))});
+//     std.debug.panic("{s}\n", .{msg});
+// }
+// pub fn print_stop_reason(process: *const Process, reason: StopReason) void {
+//     std.debug.print("Process {d} ", .{process.pid});
 
-    switch (reason.reason) {
-        .Exited => {
-            std.log.info("exited with status {d}\n", .{reason.info});
-        },
-        .Terminated => {
-            std.log.info("terminated with signal {s}\n", .{signalName(reason.info)});
-        },
-        .Stopped => {
-            std.log.info("Stopped with signal {s}\n", .{signalName(reason.info)});
-        },
-        .Running => {},
-    }
-}
+//     switch (reason.reason) {
+//         .Exited => {
+//             std.log.info("exited with status {d}\n", .{reason.info});
+//         },
+//         .Terminated => {
+//             std.log.info("terminated with signal {s}\n", .{signalName(reason.info)});
+//         },
+//         .Stopped => {
+//             std.log.info("Stopped with signal {s}\n", .{signalName(reason.info)});
+//         },
+//         .Running => {},
+//     }
+// }
 
 pub fn signalName(sig: u32) []const u8 {
-    const sig_type = @TypeOf(linux.SIG);
-    const info = @typeInfo(sig_type);
-    switch (info) {
-        .@"struct" => |s| {
-            inline for (s.fields) |field| {
-                const field_value = @field(linux.SIG, field.name);
-                if (field_value == sig) {
-                    return field.name;
-                }
-            }
-        },
-        else => {},
+    inline for (@typeInfo(linux.SIG).@"struct".decls) |decl| {
+        const field_value = @field(linux.SIG, decl.name);
+        if (@TypeOf(field_value) != comptime_int) continue;
+        if (field_value == sig) {
+            return decl.name;
+        }
     }
-
     return "UNKNOWN";
+}
+fn exit_and_set_error(channel: *Pipe, err:Err) void {
+    var buf: [1]u8 = undefined;
+    buf[0]=@intCast(@intFromError(err));
+    channel.write(&buf) catch {};
+    linux.exit(-1);
+}
+fn process_exists(pid: linux.pid_t) bool {
+    // _= pid;
+    const ret = linux.kill(pid, 0);
+    const err = linux.E.init(ret);
+    return ret != -1 and err != .SRCH;
+}
+test "process launch" {
+    const process = try Process.launch("yes");
+    defer _ = linux.kill(process.pid, linux.SIG.TERM);
+    try std.testing.expect(process_exists(process.pid));
+}
+
+test "no such program" {
+    const process = Process.launch("no_such_program_aaa");
+    // std.debug.print("{any}\n", .{process});
+    try std.testing.expectError(Err.ExecError, process);
 }

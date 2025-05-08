@@ -1,5 +1,6 @@
 const std = @import("std");
 const zdb = @import("lib/zdb.zig");
+const sigName = @import("lib/process.zig").signalName;
 const Linenoise = @import("linenoize").Linenoise;
 const linux = std.os.linux;
 
