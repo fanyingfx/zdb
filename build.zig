@@ -56,13 +56,24 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("linenoize", linenoize);
     // exe.linkSystemLibrary("editline");
     // exe.linkLibC();
+    
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
     b.installArtifact(exe);
 
-    // This *creates* a Run step in the build graph, to be executed when another
+
+
+    const test_exe = b.addExecutable(.{
+        .name = "run_endlessly",
+        .root_source_file = b.path("tests/run_endlessly.zig" ),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    b.installArtifact(test_exe);
+
     // step is evaluated that depends on it. The next line below will establish
     // such a dependency.
     const run_cmd = b.addRunArtifact(exe);

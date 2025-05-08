@@ -11,7 +11,7 @@ pub fn attach(args: [][:0]u8) !Process {
         return Process.attach(pid);
     } else {
         const program_path = args[1];
-        return Process.launch(program_path);
+        return Process.launch(program_path,false);
     }
 }
 pub fn handle_command(proc: *Process, line: []const u8) void {
