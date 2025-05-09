@@ -23,44 +23,47 @@ const StopReason = struct {
     }
 };
 pub const Process = struct {
-    is_attached:bool,
+    is_attached: bool,
     pid: posix.pid_t = 0,
     terminate_on_end_: bool = true,
     state: ProcessState = .Stopped,
 
-    pub fn init(pid: posix.pid_t, terminater_on_end: bool,is_attached:bool) Process {
-        return .{ .pid = pid, .terminate_on_end_ = terminater_on_end ,.is_attached = is_attached};
+    pub fn init(pid: posix.pid_t, terminater_on_end: bool, is_attached: bool) Process {
+        return .{ .pid = pid, .terminate_on_end_ = terminater_on_end, .is_attached = is_attached };
     }
-    pub fn deinit(proc:Process)void{
-        if(proc.pid != 0){
+    pub fn deinit(proc: Process) void {
+        if (proc.pid != 0) {
             // var status:usize=undefined;
-            if(proc.is_attached){
-                if(proc.state == .Running){
-                     posix.kill(proc.pid,linux.SIG.STOP) catch unreachable;
-                     _ = posix.waitpid(proc.pid,0);
+            if (proc.is_attached) {
+                if (proc.state == .Running) {
+                    posix.kill(proc.pid, linux.SIG.STOP) catch unreachable;
+                    _ = posix.waitpid(proc.pid, 0);
                 }
-                posix.ptrace(linux.PTRACE.DETACH,proc.pid,0, 0) catch unreachable;
-                posix.kill(proc.pid,linux.SIG.CONT) catch unreachable;
+                posix.ptrace(linux.PTRACE.DETACH, proc.pid, 0, 0) catch unreachable;
+                posix.kill(proc.pid, linux.SIG.CONT) catch unreachable;
             }
-            if (proc.terminate_on_end_){
-                posix.kill(proc.pid,linux.SIG.KILL) catch unreachable;
-                _=posix.waitpid(proc.pid,0);
+            if (proc.terminate_on_end_) {
+                posix.kill(proc.pid, linux.SIG.KILL) catch unreachable;
+                _ = posix.waitpid(proc.pid, 0);
             }
         }
     }
 
-    pub fn launch(path: [*:0]const u8,debug:bool) !Process {
+    pub fn launch(path: [*:0]const u8, debug: bool) !Process {
         var channel_buf: [1024]u8 = undefined;
         var channel: Pipe = try .init(true);
         defer channel.deinit();
-        const pid: posix.pid_t = @intCast(linux.fork());
-        if (pid < 0) {
-            return error.ForkFailed;
-        }
+        const pid: posix.pid_t = try posix.fork();
+        // if (pid < 0) {
+        //     return error.ForkFailed;
+        // }
         if (pid == 0) {
-            posix.ptrace(linux.PTRACE.TRACEME, 0, 0, 0) catch {
-                if (debug) exit_and_set_error(&channel, Err.ForkFailed);
-            };
+            channel.close_read();
+            if (debug) {
+                posix.ptrace(linux.PTRACE.TRACEME, 0, 0, 0) catch {
+                    exit_and_set_error(&channel, Err.ForkFailed);
+                };
+            }
             std.posix.execvpeZ(path, &.{null}, &.{null}) catch {
                 exit_and_set_error(&channel, Err.ExecError);
             };
@@ -73,26 +76,27 @@ pub const Process = struct {
             const err = @errorFromInt(data[0]);
             return err;
         }
-        var proc: Process = .init(pid, true,debug);
-        if(debug){
-
-        _ = proc.wait_on_signal();
+        var proc: Process = .init(pid, true, debug);
+        if (debug) {
+            _ = proc.wait_on_signal();
         }
         return proc;
     }
     pub fn attach(pid: linux.pid_t) !Process {
         if (pid <= 0)
             return error.InvalidPid;
-        posix.ptrace(linux.PTRACE.ATTACH, pid, 0, 0) catch {
+        posix.ptrace(linux.PTRACE.ATTACH, pid, 0, 0) catch |err| {
+            std.debug.print("error : {s}\n", .{@errorName(err)});
             return error.AttachFailed;
         };
-        var proc: Process = .init(pid, false,true);
+        var proc: Process = .init(pid, false, true);
         _ = proc.wait_on_signal();
         return proc;
     }
-    pub fn resume_process(proc: *Process) void {
+    pub fn resume_process(proc: *Process) !void {
         posix.ptrace(linux.PTRACE.CONT, proc.pid, 0, 0) catch {
-            std.debug.panic("Couldn't continue\n", .{});
+            // std.debug.panic("Couldn't continue\n", .{});
+            return error.ResumeError;
         };
         proc.state = .Running;
     }
@@ -154,8 +158,8 @@ fn get_process_status(pid: posix.pid_t) !u8 {
     const path = std.fmt.bufPrint(&buf, "/proc/{}/stat", .{pid}) catch unreachable;
     const file = std.fs.openFileAbsolute(path, .{ .mode = .read_only }) catch unreachable;
     defer file.close();
-    const max_line_length:usize = 8192;
-    const line_data = file.reader().readUntilDelimiterAlloc(std.heap.page_allocator,'\n',max_line_length) catch unreachable;
+    const max_line_length: usize = 8192;
+    const line_data = file.reader().readUntilDelimiterAlloc(std.heap.page_allocator, '\n', max_line_length) catch unreachable;
     defer std.heap.page_allocator.free(line_data);
 
     const index_of_last_parenthesis = std.mem.lastIndexOf(u8, line_data, &[_]u8{')'}) orelse return error.InvalidFormat;
@@ -164,22 +168,52 @@ fn get_process_status(pid: posix.pid_t) !u8 {
     }
 
     return line_data[index_of_last_parenthesis + 2];
-
 }
 test "process launch" {
-    const process = try Process.launch("yes",true);
+    const process = try Process.launch("yes", true);
     defer process.deinit();
     try std.testing.expect(process_exists(process.pid));
 }
 
 test "no such program" {
-    const process = Process.launch("no_such_program_aaa",true);
+    const process = Process.launch("no_such_program_aaa", true);
     try std.testing.expectError(Err.ExecError, process);
 }
 
-test "attach success"{
-    const proc:Process = try .launch("zig-out/bin/run_endlessly",true);
+test "attach success" {
+    const proc: Process = try .launch("zig-out/bin/run_endlessly", true);
     defer proc.deinit();
     const status = try get_process_status(proc.pid);
-    try std.testing.expectEqual('t',status);
+    try std.testing.expectEqual('t', status);
+}
+
+test "attach invalid pid" {
+    const proc = Process.attach(0);
+    try std.testing.expectError(error.InvalidPid, proc);
+}
+
+test "resume success" {
+    {
+        var proc: Process = try .launch("zig-out/bin/run_endlessly", true);
+        defer proc.deinit();
+        try proc.resume_process();
+        const status = try get_process_status(proc.pid);
+        try std.testing.expect(status == 'R' or status == 'S');
+    }
+    {
+        var target: Process = try .launch("zig-out/bin/run_endlessly", false);
+        defer target.deinit();
+        var proc: Process = try .attach(target.pid);
+        try proc.resume_process();
+        const status = try get_process_status(proc.pid);
+        try std.testing.expect(status == 'R' or status == 'S');
+    }
+}
+test "resume already terminated"{
+    var proc:Process = try .launch("zig-out/bin/end_immediately",true);
+    try proc.resume_process();
+    _ =proc.wait_on_signal();
+    const err = proc.resume_process();
+    try std.testing.expectError(error.ResumeError,err);
+
 }

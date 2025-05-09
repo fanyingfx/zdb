@@ -56,7 +56,6 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("linenoize", linenoize);
     // exe.linkSystemLibrary("editline");
     // exe.linkLibC();
-    
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -64,15 +63,8 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
 
-
-    const test_exe = b.addExecutable(.{
-        .name = "run_endlessly",
-        .root_source_file = b.path("tests/run_endlessly.zig" ),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    b.installArtifact(test_exe);
+    add_test_exe(b,target,"run_endlessly");
+    add_test_exe(b,target,"end_immediately");
 
     // step is evaluated that depends on it. The next line below will establish
     // such a dependency.
@@ -105,9 +97,33 @@ pub fn build(b: *std.Build) void {
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
+    const process_tests = b.addTest(.{
+        .root_source_file = b.path("src/lib/process.zig"), // 指定要测试的文件
+        .target = target,
+        .optimize = optimize,
+    });
+    const run_process_tests_step = b.addRunArtifact(process_tests);
+
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(&run_process_tests_step.step);
+}
+
+fn add_test_exe(b:*std.Build,target:std.Build.ResolvedTarget,name:[]const u8)void{
+    var path_buf:[512]u8=undefined;
+    const path=  std.fmt.bufPrint(&path_buf,"tests/{s}.zig",.{name}) catch unreachable;
+    // const target = b.standardTargetOptions(.{});
+    // const optimize = b.standardOptimizeOption(.{});
+    
+    const test_exe = b.addExecutable(.{
+        .name = name,
+        .root_source_file = b.path(path),
+        .target = target,
+        // .optimize = optimize,
+    });
+    // return test_exe;
+    b.installArtifact(test_exe);
 }
